@@ -5,7 +5,6 @@ from packaging.specifiers import SpecifierSet
 import requests
 
 from safety import safety
-from safety.errors import InvalidKeyError
 from collections import OrderedDict
 
 from .updates import InitialUpdate, SequentialUpdate, ScheduledUpdate
@@ -13,6 +12,7 @@ from .pullrequest import PullRequest
 import logging
 from . import package
 from .package import Package
+from . import pyup_api
 from pyup import settings
 from datetime import datetime
 from dparse import parse, parser, updater, filetypes
@@ -191,6 +191,11 @@ class RequirementFile(object):
                 index_servers[url] = index_server
                 return index_server
 
+        if settings.api_key:
+            pyup_api_server = pyup_api.PyupApiServer(settings.api_key)
+        else:
+            pyup_api_server = None
+
         for dep in result.dependencies:
             req = klass(
                 name=dep.name,
@@ -201,6 +206,7 @@ class RequirementFile(object):
                 file_type=file_type,
             )
             req.index_server = _get_index_server_for(dep.index_server)
+            req.pyup_api_server = pyup_api_server
             if self.is_pipfile:
                 req.pipfile = self.path
             if req.package:
@@ -235,6 +241,7 @@ class Requirement(object):
         self._package = None
         self.file_type = file_type
         self.pipfile = None
+        self.pyup_api_server = None
 
         self.hashCmp = (
             self.key,
@@ -427,31 +434,27 @@ class Requirement(object):
     def changelog(self):
         if self._changelog is None:
             self._changelog = OrderedDict()
-            if settings.api_key:
-                r = requests.get(
-                    "https://pyup.io/api/v1/changelogs/{}/".format(self.key),
-                    headers={"X-Api-Key": settings.api_key}
-                )
-                if r.status_code == 403:
-                    raise InvalidKeyError
-                if r.status_code == 200:
-                    data = r.json()
-                    if data:
-                        # sort the changelog by release
-                        sorted_log = sorted(
-                            data.items(), key=lambda v: parse_version(v[0]), reverse=True)
-                        # go over each release and add it to the log if it's within the "upgrade
-                        # range" e.g. update from 1.2 to 1.3 includes a changelog for 1.2.1 but
-                        # not for 0.4.
-                        for version, log in sorted_log:
-                            parsed_version = parse_version(version)
-                            if self.is_pinned and parsed_version > parse_version(
-                                self.version) and parsed_version <= parse_version(
-                                    self.latest_version_within_specs):
-                                self._changelog[version] = log
-                            elif not self.is_pinned and parsed_version <= parse_version(
-                                    self.latest_version_within_specs):
-                                self._changelog[version] = log
+            if self.pyup_api_server:
+                changelog = self.pyup_api_server.get_changelog(self.key)
+                if changelog:
+                    # sort the changelog by release
+                    sorted_log = sorted(
+                        changelog.items(),
+                        key=lambda v: parse_version(v[0]),
+                        reverse=True,
+                    )
+                    # go over each release and add it to the log if it's within the "upgrade
+                    # range" e.g. update from 1.2 to 1.3 includes a changelog for 1.2.1 but
+                    # not for 0.4.
+                    for version, log in sorted_log:
+                        parsed_version = parse_version(version)
+                        if self.is_pinned and parsed_version > parse_version(
+                            self.version) and parsed_version <= parse_version(
+                                self.latest_version_within_specs):
+                            self._changelog[version] = log
+                        elif not self.is_pinned and parsed_version <= parse_version(
+                                self.latest_version_within_specs):
+                            self._changelog[version] = log
         return self._changelog
 
     @property
