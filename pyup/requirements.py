@@ -187,7 +187,7 @@ class RequirementFile(object):
             if url in index_servers:
                 return index_servers[url]
             else:
-                index_server = package.JsonIndexServer(url)
+                index_server = package.SimpleIndexServer(url)
                 index_servers[url] = index_server
                 return index_server
 
