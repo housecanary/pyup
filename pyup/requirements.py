@@ -11,7 +11,8 @@ from collections import OrderedDict
 from .updates import InitialUpdate, SequentialUpdate, ScheduledUpdate
 from .pullrequest import PullRequest
 import logging
-from .package import Package, fetch_package
+from . import package
+from .package import Package
 from pyup import settings
 from datetime import datetime
 from dparse import parse, parser, updater, filetypes
@@ -178,6 +179,18 @@ class RequirementFile(object):
                 ("pyup: ignore", "pyup:ignore"),  # line marker
             )
         )
+        index_servers = {
+            None: package.JsonIndexServer(),  # PyPI
+        }
+
+        def _get_index_server_for(url):
+            if url in index_servers:
+                return index_servers[url]
+            else:
+                index_server = package.JsonIndexServer(url)
+                index_servers[url] = index_server
+                return index_server
+
         for dep in result.dependencies:
             req = klass(
                 name=dep.name,
@@ -187,7 +200,7 @@ class RequirementFile(object):
                 extras=dep.extras,
                 file_type=file_type,
             )
-            req.index_server = dep.index_server
+            req.index_server = _get_index_server_for(dep.index_server)
             if self.is_pipfile:
                 req.pipfile = self.path
             if req.package:
@@ -384,7 +397,7 @@ class Requirement(object):
     @property
     def package(self):
         if not self._fetched_package:
-            self._package = fetch_package(self.name, self.index_server)
+            self._package = self.index_server.fetch_package(self.name)
             self._fetched_package = True
         return self._package
 
